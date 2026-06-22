@@ -20,6 +20,11 @@ from app.cache import (
     set_suggestions_in_cache,
     get_cache_debug_info
 )
+from app.batch import (
+    initialize_batch_system,
+    close_batch_system,
+    record_search
+)
 
 
 @asynccontextmanager
@@ -49,6 +54,9 @@ async def lifespan(app: FastAPI):
         # Initialize Redis cache and consistent hashing
         await initialize_cache()
         
+        # Initialize batch write system
+        await initialize_batch_system()
+        
         logger.info("✅ Application startup complete")
         
     except Exception as e:
@@ -59,6 +67,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down...")
+    await close_batch_system()
     await close_cache()
     await close_pool()
     logger.info("✅ Shutdown complete")
@@ -192,7 +201,7 @@ async def submit_search(request: SearchRequest):
     """
     Submit a search query and update counts.
     
-    Phase 3: Synchronous write to PostgreSQL (batch writes in Phase 5).
+    Phase 5: Asynchronous batch write (buffered, flushed periodically).
     
     Args:
         request: SearchRequest with query field
@@ -207,22 +216,14 @@ async def submit_search(request: SearchRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
     try:
-        # Upsert to PostgreSQL synchronously
-        upsert_query = """
-            INSERT INTO queries (query, total_count, last_searched_at)
-            VALUES ($1, 1, NOW())
-            ON CONFLICT (query) DO UPDATE
-            SET total_count = queries.total_count + 1,
-                last_searched_at = NOW()
-        """
+        # Record in active buffer (async write - Phase 5)
+        await record_search(query)
         
-        await execute(upsert_query, query)
-        
-        logger.info(f"Search submitted: '{query}'")
+        logger.info(f"Search buffered: '{query}'")
         return SearchResponse(message="Searched")
     
     except Exception as e:
-        logger.error(f"Error submitting search for '{query}': {e}", exc_info=True)
+        logger.error(f"Error buffering search for '{query}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to submit search")
 
 
