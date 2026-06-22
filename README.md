@@ -340,5 +340,5 @@ Phase 8: Metrics, debug API, performance testing ✅
 
 ## 👤 Author
 
-**Amritesh Indal**  
+**Pulasari Jai**  
 HLD Assignment — Search Typeahead System
