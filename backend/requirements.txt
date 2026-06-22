@@ -1,0 +1,16 @@
+# FastAPI and ASGI server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# Async PostgreSQL driver
+asyncpg==0.29.0
+
+# Async Redis client
+redis[hiredis]==5.0.1
+
+# Configuration management
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# Utilities
+python-multipart==0.0.6

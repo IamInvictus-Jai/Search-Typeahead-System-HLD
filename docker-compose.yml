@@ -1,0 +1,162 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: typeahead-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  # Redis Cache Nodes
+  redis-node-1:
+    image: redis:7-alpine
+    container_name: typeahead-redis-node-1
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  redis-node-2:
+    image: redis:7-alpine
+    container_name: typeahead-redis-node-2
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  redis-node-3:
+    image: redis:7-alpine
+    container_name: typeahead-redis-node-3
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  redis-node-4:
+    image: redis:7-alpine
+    container_name: typeahead-redis-node-4
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6382:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  redis-node-5:
+    image: redis:7-alpine
+    container_name: typeahead-redis-node-5
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6383:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  # Redis Queue (WAL) with AOF persistence
+  redis-queue:
+    image: redis:7-alpine
+    container_name: typeahead-redis-queue
+    command: redis-server --appendonly yes --appendfsync everysec
+    ports:
+      - "6384:6379"
+    volumes:
+      - redis_queue_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - typeahead-network
+
+  # Backend Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: typeahead-backend
+    env_file:
+      - .env
+    ports:
+      - "${BACKEND_PORT}:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-node-1:
+        condition: service_healthy
+      redis-node-2:
+        condition: service_healthy
+      redis-node-3:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+    networks:
+      - typeahead-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: typeahead-frontend
+    ports:
+      - "${FRONTEND_PORT}:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      - backend
+    networks:
+      - typeahead-network
+    command: npm run dev -- --host
+
+volumes:
+  postgres_data:
+  redis_queue_data:
+
+networks:
+  typeahead-network:
+    driver: bridge
