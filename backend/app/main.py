@@ -25,6 +25,7 @@ from app.batch import (
     close_batch_system,
     record_search
 )
+from app.trending import get_trending_suggestions
 
 
 @asynccontextmanager
@@ -141,13 +142,13 @@ async def get_suggestions(q: str = ""):
     """
     Get typeahead suggestions for a given prefix.
     
-    Phase 4: Cache-first read path with consistent hashing.
+    Phase 6: Recency-aware scoring (trending).
     
     Args:
         q: Search prefix
     
     Returns:
-        List of up to 10 suggestions sorted by total_count descending
+        List of up to 10 suggestions sorted by trending score (descending)
     """
     # Normalize prefix
     prefix = normalize_prefix(q)
@@ -157,7 +158,7 @@ async def get_suggestions(q: str = ""):
         return []
     
     try:
-        # Check cache first (Phase 4)
+        # Check cache first
         cached_suggestions = await get_suggestions_from_cache(prefix)
         
         if cached_suggestions is not None:
@@ -167,28 +168,20 @@ async def get_suggestions(q: str = ""):
                 for item in cached_suggestions
             ]
         
-        # Cache miss - query PostgreSQL
-        query = """
-            SELECT query, total_count as score
-            FROM queries
-            WHERE query LIKE $1
-            ORDER BY total_count DESC
-            LIMIT 10
-        """
-        
-        results = await fetch(query, f"{prefix}%")
+        # Cache miss - query with trending score (Phase 6)
+        suggestions_data = await get_trending_suggestions(prefix, limit=10)
         
         # Convert to response model
         suggestions = [
-            SuggestionResponse(query=row['query'], score=float(row['score']))
-            for row in results
+            SuggestionResponse(query=item['query'], score=item['score'])
+            for item in suggestions_data
         ]
         
         # Store in cache for future requests
         cache_data = [{"query": s.query, "score": s.score} for s in suggestions]
         await set_suggestions_in_cache(prefix, cache_data)
         
-        logger.info(f"Suggestions for '{prefix}': {len(suggestions)} results (from DB)")
+        logger.info(f"Suggestions for '{prefix}': {len(suggestions)} results (trending scores)")
         return suggestions
     
     except Exception as e:

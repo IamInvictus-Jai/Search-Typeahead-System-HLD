@@ -13,6 +13,7 @@ from app.logger import logger
 from app.db import execute
 from app.cache import invalidate_cache_keys
 from app.utils import normalize_prefix
+from app.trending import update_recent_searches_batch, cleanup_old_buckets
 
 
 # Global state
@@ -152,6 +153,7 @@ async def push_to_wal(data: Dict[str, int]) -> bool:
 async def flush_worker():
     """
     Background worker that periodically flushes and processes WAL.
+    Also cleans up old bucket entries.
     Runs continuously until application shutdown.
     """
     logger.info(f"Flush worker running (interval: {settings.batch_flush_interval}s)")
@@ -166,6 +168,9 @@ async def flush_worker():
             
             # Process WAL queue
             await process_wal()
+            
+            # Cleanup old buckets (Phase 6)
+            await cleanup_old_buckets()
         
         except asyncio.CancelledError:
             logger.info("Flush worker cancelled")
@@ -208,6 +213,7 @@ async def process_wal():
 async def write_batch_to_db(batch: Dict[str, int]):
     """
     Bulk write batch to PostgreSQL using upsert.
+    Also updates recent_searches for trending.
     
     Args:
         batch: Dictionary of query -> count deltas
@@ -216,8 +222,7 @@ async def write_batch_to_db(batch: Dict[str, int]):
         return
     
     try:
-        # Build bulk upsert query
-        # Use unnest for efficient bulk upsert
+        # Build bulk upsert query for main queries table
         queries = list(batch.keys())
         counts = [batch[q] for q in queries]
         
@@ -231,6 +236,9 @@ async def write_batch_to_db(batch: Dict[str, int]):
         
         await execute(query, queries, counts)
         logger.info(f"Wrote {len(batch)} queries to PostgreSQL")
+        
+        # Update recent_searches for trending (Phase 6)
+        await update_recent_searches_batch(batch)
     
     except Exception as e:
         logger.error(f"Database write error: {e}", exc_info=True)
