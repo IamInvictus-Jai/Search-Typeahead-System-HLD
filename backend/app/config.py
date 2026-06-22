@@ -19,17 +19,17 @@ class Settings(BaseSettings):
     
     # Redis Connection
     redis_node_1_host: str = "redis-node-1"
-    redis_node_1_port: int = 6379
+    redis_node_1_port: int = 6379  # Internal port
     redis_node_2_host: str = "redis-node-2"
-    redis_node_2_port: int = 6380
+    redis_node_2_port: int = 6379  # Internal port
     redis_node_3_host: str = "redis-node-3"
-    redis_node_3_port: int = 6381
+    redis_node_3_port: int = 6379  # Internal port
     redis_node_4_host: str = "redis-node-4"
-    redis_node_4_port: int = 6382
+    redis_node_4_port: int = 6379  # Internal port
     redis_node_5_host: str = "redis-node-5"
-    redis_node_5_port: int = 6383
+    redis_node_5_port: int = 6379  # Internal port
     redis_queue_host: str = "redis-queue"
-    redis_queue_port: int = 6384
+    redis_queue_port: int = 6379  # Internal port
     
     # Batch Write Configuration
     batch_flush_interval: int = 10

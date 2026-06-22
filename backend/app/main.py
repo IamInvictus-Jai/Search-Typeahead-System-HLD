@@ -13,6 +13,13 @@ from app.logger import logger
 from app.db import get_pool, close_pool, create_tables, fetch, execute
 from app.ingestion import ensure_data_loaded
 from app.utils import normalize_prefix
+from app.cache import (
+    initialize_cache,
+    close_cache,
+    get_suggestions_from_cache,
+    set_suggestions_in_cache,
+    get_cache_debug_info
+)
 
 
 @asynccontextmanager
@@ -39,6 +46,9 @@ async def lifespan(app: FastAPI):
         # Ensure data is loaded (idempotent)
         await ensure_data_loaded()
         
+        # Initialize Redis cache and consistent hashing
+        await initialize_cache()
+        
         logger.info("✅ Application startup complete")
         
     except Exception as e:
@@ -49,6 +59,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down...")
+    await close_cache()
     await close_pool()
     logger.info("✅ Shutdown complete")
 
@@ -121,7 +132,7 @@ async def get_suggestions(q: str = ""):
     """
     Get typeahead suggestions for a given prefix.
     
-    Phase 3: Direct PostgreSQL query (no cache yet).
+    Phase 4: Cache-first read path with consistent hashing.
     
     Args:
         q: Search prefix
@@ -137,7 +148,17 @@ async def get_suggestions(q: str = ""):
         return []
     
     try:
-        # Query PostgreSQL directly (no cache in Phase 3)
+        # Check cache first (Phase 4)
+        cached_suggestions = await get_suggestions_from_cache(prefix)
+        
+        if cached_suggestions is not None:
+            # Cache hit - return cached results
+            return [
+                SuggestionResponse(query=item['query'], score=item['score'])
+                for item in cached_suggestions
+            ]
+        
+        # Cache miss - query PostgreSQL
         query = """
             SELECT query, total_count as score
             FROM queries
@@ -154,7 +175,11 @@ async def get_suggestions(q: str = ""):
             for row in results
         ]
         
-        logger.info(f"Suggestions for '{prefix}': {len(suggestions)} results")
+        # Store in cache for future requests
+        cache_data = [{"query": s.query, "score": s.score} for s in suggestions]
+        await set_suggestions_in_cache(prefix, cache_data)
+        
+        logger.info(f"Suggestions for '{prefix}': {len(suggestions)} results (from DB)")
         return suggestions
     
     except Exception as e:
@@ -199,3 +224,31 @@ async def submit_search(request: SearchRequest):
     except Exception as e:
         logger.error(f"Error submitting search for '{query}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to submit search")
+
+
+@app.get("/cache/debug")
+async def cache_debug(prefix: str = ""):
+    """
+    Debug endpoint to show cache routing and status.
+    
+    Demonstrates consistent hashing distribution across nodes.
+    
+    Args:
+        prefix: Search prefix to debug
+    
+    Returns:
+        Debug information including node assignment, hit/miss status, TTL
+    """
+    if not prefix:
+        raise HTTPException(status_code=400, detail="Prefix parameter required")
+    
+    # Normalize prefix (same as suggest endpoint)
+    normalized = normalize_prefix(prefix)
+    
+    try:
+        debug_info = await get_cache_debug_info(normalized)
+        return debug_info
+    
+    except Exception as e:
+        logger.error(f"Cache debug error for '{prefix}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Cache debug failed")
