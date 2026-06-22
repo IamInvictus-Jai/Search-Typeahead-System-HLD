@@ -9,6 +9,7 @@ from app.config import settings
 from app.logger import logger
 from app.hashing import ConsistentHashRing
 from app.utils import normalize_prefix
+from app.metrics import metrics
 
 
 # Global cache state
@@ -109,9 +110,11 @@ async def get_suggestions_from_cache(prefix: str) -> Optional[List[dict]]:
         
         if cached_value:
             logger.info(f"Cache HIT: '{prefix}' on {node}")
+            metrics.record_cache_hit()
             return json.loads(cached_value)
         else:
             logger.info(f"Cache MISS: '{prefix}' on {node}")
+            metrics.record_cache_miss()
             return None
     
     except Exception as e:

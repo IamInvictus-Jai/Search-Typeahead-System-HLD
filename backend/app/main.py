@@ -3,7 +3,8 @@ FastAPI application entry point.
 Phase 3: Basic typeahead API with direct PostgreSQL queries.
 """
 
-from fastapi import FastAPI, HTTPException
+import time
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -23,9 +24,11 @@ from app.cache import (
 from app.batch import (
     initialize_batch_system,
     close_batch_system,
-    record_search
+    record_search,
+    get_buffer_stats
 )
-from app.trending import get_trending_suggestions
+from app.trending import get_trending_suggestions, get_trending_stats
+from app.metrics import metrics
 
 
 @asynccontextmanager
@@ -96,6 +99,32 @@ app.add_middleware(
 )
 
 
+# Add latency tracking middleware
+@app.middleware("http")
+async def track_latency(request: Request, call_next):
+    """
+    Middleware to track request latencies.
+    Records timing for /suggest endpoint.
+    """
+    start_time = time.time()
+    
+    response = await call_next(request)
+    
+    # Calculate latency in milliseconds
+    latency_ms = (time.time() - start_time) * 1000
+    
+    # Record latency for /suggest requests
+    if request.url.path == "/suggest":
+        # Determine if it was a cache hit by checking the response
+        # We'll track this separately in the endpoint
+        metrics.record_latency(latency_ms)
+    
+    # Add latency header for debugging
+    response.headers["X-Response-Time"] = f"{latency_ms:.2f}ms"
+    
+    return response
+
+
 # Request/Response Models
 class SuggestionResponse(BaseModel):
     query: str
@@ -158,28 +187,36 @@ async def get_suggestions(q: str = ""):
         return []
     
     try:
+        request_start = time.time()
+        cache_hit = False
+        
         # Check cache first
         cached_suggestions = await get_suggestions_from_cache(prefix)
         
         if cached_suggestions is not None:
             # Cache hit - return cached results
-            return [
+            cache_hit = True
+            suggestions = [
                 SuggestionResponse(query=item['query'], score=item['score'])
                 for item in cached_suggestions
             ]
+        else:
+            # Cache miss - query with trending score (Phase 6)
+            suggestions_data = await get_trending_suggestions(prefix, limit=10)
+            
+            # Convert to response model
+            suggestions = [
+                SuggestionResponse(query=item['query'], score=item['score'])
+                for item in suggestions_data
+            ]
+            
+            # Store in cache for future requests
+            cache_data = [{"query": s.query, "score": s.score} for s in suggestions]
+            await set_suggestions_in_cache(prefix, cache_data)
         
-        # Cache miss - query with trending score (Phase 6)
-        suggestions_data = await get_trending_suggestions(prefix, limit=10)
-        
-        # Convert to response model
-        suggestions = [
-            SuggestionResponse(query=item['query'], score=item['score'])
-            for item in suggestions_data
-        ]
-        
-        # Store in cache for future requests
-        cache_data = [{"query": s.query, "score": s.score} for s in suggestions]
-        await set_suggestions_in_cache(prefix, cache_data)
+        # Record cache-specific latency
+        request_latency = (time.time() - request_start) * 1000
+        metrics.record_latency(request_latency, cache_hit=cache_hit)
         
         logger.info(f"Suggestions for '{prefix}': {len(suggestions)} results (trending scores)")
         return suggestions
@@ -246,3 +283,32 @@ async def cache_debug(prefix: str = ""):
     except Exception as e:
         logger.error(f"Cache debug error for '{prefix}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Cache debug failed")
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """
+    Get performance metrics snapshot.
+    
+    Returns comprehensive metrics including:
+    - Cache hit rate
+    - Database operations
+    - Write reduction percentage
+    - Latency percentiles (p50, p95, p99)
+    - Cache hit/miss latencies
+    
+    Returns:
+        Dictionary with all metrics
+    """
+    try:
+        snapshot = metrics.get_snapshot()
+        
+        # Add additional context
+        snapshot["buffer_stats"] = get_buffer_stats()
+        snapshot["trending_stats"] = await get_trending_stats()
+        
+        return snapshot
+    
+    except Exception as e:
+        logger.error(f"Error generating metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate metrics")

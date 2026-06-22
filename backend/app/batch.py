@@ -14,6 +14,7 @@ from app.db import execute
 from app.cache import invalidate_cache_keys
 from app.utils import normalize_prefix
 from app.trending import update_recent_searches_batch, cleanup_old_buckets
+from app.metrics import metrics
 
 
 # Global state
@@ -84,6 +85,9 @@ async def record_search(query: str):
     
     async with buffer_lock:
         active_buffer[query] = active_buffer.get(query, 0) + 1
+    
+    # Record metrics
+    metrics.record_search()
     
     # Check if we should flush based on threshold
     if len(active_buffer) >= settings.batch_flush_threshold:
@@ -236,6 +240,9 @@ async def write_batch_to_db(batch: Dict[str, int]):
         
         await execute(query, queries, counts)
         logger.info(f"Wrote {len(batch)} queries to PostgreSQL")
+        
+        # Record metrics
+        metrics.record_db_write(len(batch))
         
         # Update recent_searches for trending (Phase 6)
         await update_recent_searches_batch(batch)
